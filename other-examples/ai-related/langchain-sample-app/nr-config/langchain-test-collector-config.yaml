@@ -1,0 +1,84 @@
+#Added mapping for agent name and tool name
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+
+  resource:
+    attributes:
+      - key: service.name
+        value: langchain-test
+        action: upsert
+      - key: deployment.environment
+        value: development
+        action: upsert
+
+  transform/gen_ai_conversion:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          # Set agent name only on workflow span
+        - 'set(attributes["gen_ai.agent.name"], attributes["traceloop.workflow.name"]) where attributes["traceloop.span.kind"] == "workflow"'
+          # Set tool name only for actual tool execution
+        - 'set(attributes["gen_ai.tool.name"], attributes["traceloop.entity.name"]) where attributes["traceloop.span.kind"] == "tool"'
+        
+      
+
+
+
+       
+
+    
+          
+          
+exporters:
+  # New Relic exporter
+  otlphttp/newrelic:
+    endpoint: https://staging-otlp.nr-data.net:4318
+    headers:
+      api-key: ${NEW_RELIC_LICENSE_KEY}
+    compression: gzip
+    timeout: 30s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Debug exporter for local testing (debug level to see individual spans)
+  logging:
+    loglevel: debug
+
+  # Optional: Export to local file for debugging
+  file:
+    path: ./telemetry-data.json
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource, transform/gen_ai_conversion]
+      exporters: [otlphttp/newrelic, logging]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/newrelic]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/newrelic]
