@@ -1,0 +1,47 @@
+extensions:
+  health_check: {}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: otel-collector:4317
+      http:
+        endpoint: otel-collector:4318
+
+processors:
+  batch:
+
+  resource/ai_enabled:
+    attributes:
+      - key: aiEnabledApp
+        value: "true"
+        action: insert
+
+
+exporters:
+  otlp_http/newrelic:
+  # For EU accounts, use: https://otlp.eu01.nr-data.net
+  # docs: https://docs.newrelic.com/docs/more-integrations/open-source-telemetry-integrations/opentelemetry/best-practices/opentelemetry-otlp/#configure-endpoint-port-protocol
+    endpoint: https://otlp.nr-data.net
+    headers:
+      api-key: "${env:NEW_RELIC_API_KEY}"
+    compression: gzip
+       
+  # Debug exporter to see data in logs (optional)
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/ai_enabled, batch]
+      exporters: [otlp_http/newrelic, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]

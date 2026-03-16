@@ -1,0 +1,6 @@
+langfuse>=3.0.0
+langchain
+langchain-openai
+python-dotenv
+fastapi
+uvicorn

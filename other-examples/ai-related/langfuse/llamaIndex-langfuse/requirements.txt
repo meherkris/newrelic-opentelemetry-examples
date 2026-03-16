@@ -1,0 +1,8 @@
+langfuse>=3.0.0
+openinference-instrumentation-llama-index
+llama-index-core
+llama-index-llms-openai
+fastapi
+uvicorn
+python-dotenv
+pydantic

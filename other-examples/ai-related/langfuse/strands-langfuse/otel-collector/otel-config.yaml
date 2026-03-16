@@ -1,0 +1,62 @@
+extensions:
+  health_check: {}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: otel-collector:4317
+      http:
+        endpoint: otel-collector:4318
+
+processors:
+  batch:
+
+  resource/ai_enabled:
+    attributes:
+      - key: aiEnabledApp
+        value: "true"
+        action: insert
+        
+  transform/gen_ai_latest:
+    error_mode: ignore
+    trace_statements:
+      - context: spanevent
+        conditions:
+          - name == "gen_ai.client.inference.operation.details"
+        statements:
+          - set(span.attributes["gen_ai.input.messages"], attributes["gen_ai.input.messages"])
+            where IsMatch(attributes["gen_ai.input.messages"], ".*")
+          - set(span.attributes["gen_ai.output.messages"], attributes["gen_ai.output.messages"])
+            where IsMatch(attributes["gen_ai.output.messages"], ".*")
+      - context: span
+        statements:
+          - set(attributes["gen_ai.response.finish_reasons"],
+            ExtractPatterns(attributes["gen_ai.output.messages"], "\"finish_reason\":\\s*\"(?P<finish_reason>[^\"]+)\"")["finish_reason"])
+            where IsMatch(attributes["gen_ai.output.messages"], ".*finish_reason.*")
+
+exporters:
+  otlp_http/newrelic:
+  # For EU accounts, use: https://otlp.eu01.nr-data.net
+  # docs: https://docs.newrelic.com/docs/more-integrations/open-source-telemetry-integrations/opentelemetry/best-practices/opentelemetry-otlp/#configure-endpoint-port-protocol
+    endpoint: https://otlp.nr-data.net
+    headers:
+      api-key: "${env:NEW_RELIC_API_KEY}"
+    compression: gzip
+
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/ai_enabled, transform/gen_ai_latest, batch]
+      exporters: [otlp_http/newrelic, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
