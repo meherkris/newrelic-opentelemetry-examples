@@ -1,0 +1,84 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+
+  resource:
+    attributes:
+      - key: service.name
+        value: strands-math-tutor
+        action: upsert
+      - key: deployment.environment
+        value: development
+        action: upsert
+
+  transform/gen_ai_conversion:
+    error_mode: ignore
+    trace_statements:
+      # --- Copy structured input/output from span events to span attributes ---
+      - context: spanevent
+        statements:
+          - 'set(span.attributes["gen_ai.input.messages"], attributes["gen_ai.input.messages"]) where name == "gen_ai.client.inference.operation.details"'
+          - 'set(span.attributes["gen_ai.output.messages"], attributes["gen_ai.output.messages"]) where name == "gen_ai.client.inference.operation.details"'
+          # Extract finish_reason from serialized gen_ai.output.messages JSON
+          # Only match events whose gen_ai.output.messages contains "finish_reason"
+          - 'set(span.attributes["gen_ai.response.finish_reasons"], attributes["gen_ai.output.messages"]) where name == "gen_ai.client.inference.operation.details" and IsMatch(attributes["gen_ai.output.messages"], ".*finish_reason.*")'
+          # Strip everything before the finish_reason value (no newlines after finish_reason key)
+          - 'replace_pattern(span.attributes["gen_ai.response.finish_reasons"], "^[\\s\\S]*\"finish_reason\":\\s*\"", "") where name == "gen_ai.client.inference.operation.details" and span.attributes["gen_ai.response.finish_reasons"] != nil'
+          # Strip everything after the finish_reason value
+          - 'replace_pattern(span.attributes["gen_ai.response.finish_reasons"], "\"[\\s\\S]*$", "") where name == "gen_ai.client.inference.operation.details" and span.attributes["gen_ai.response.finish_reasons"] != nil'
+      # --- Map gen_ai.provider.name (latest convention) to gen_ai.system (legacy) for New Relic ---
+      - context: span
+        statements:
+          - 'set(attributes["gen_ai.system"], attributes["gen_ai.provider.name"]) where attributes["gen_ai.provider.name"] != nil and attributes["gen_ai.system"] == nil'
+
+exporters:
+  # New Relic exporter
+  otlphttp/newrelic:
+    endpoint: https://staging-otlp.nr-data.net:4318
+    headers:
+      api-key: ${NEW_RELIC_LICENSE_KEY}
+    compression: gzip
+    timeout: 30s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+  # Debug exporter for local testing (info level to reduce noise)
+  logging:
+    loglevel: info
+
+  # Optional: Export to local file for debugging
+  file:
+    path: ./telemetry-data.json
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource, transform/gen_ai_conversion]
+      exporters: [otlphttp/newrelic, logging]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/newrelic]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [otlphttp/newrelic]
