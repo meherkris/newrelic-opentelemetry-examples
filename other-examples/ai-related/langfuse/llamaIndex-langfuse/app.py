@@ -20,7 +20,7 @@ if otel_endpoint:
 
     resource = Resource.create(attributes={"host": socket.gethostname()})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{otel_endpoint}/v1/traces")))
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otel_endpoint)))
     trace.set_tracer_provider(provider)
 
 from fastapi import FastAPI

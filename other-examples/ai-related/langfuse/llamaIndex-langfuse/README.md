@@ -179,3 +179,23 @@ The [otel-config.yaml](otel-collector/otel-config.yaml) transforms OpenInference
 > span.set_attribute("gen_ai.input.messages", json.dumps([{"role": "user", "content": request.prompt}]))
 > span.set_attribute("gen_ai.output.messages", json.dumps([{"role": "assistant", "content": str(response)}]))
 > ```
+
+## Port Reference
+
+- **8000** — FastAPI app
+- **4317** — OTEL Collector gRPC
+- **4318** — OTEL Collector HTTP
+
+## Troubleshooting
+
+**No spans in collector logs**
+- Check `OTEL_EXPORTER_OTLP_ENDPOINT` includes the full path: `http://localhost:4318/v1/traces`
+
+**No data in New Relic**
+- Verify `NEW_RELIC_LICENSE_KEY` is set in the collector environment
+- Check collector logs: `cd otel-collector && docker compose logs otel-collector`
+- Wait 3-4 minutes for data to appear
+
+**Collector fails to start**
+- Check config syntax: `cd otel-collector && docker compose logs otel-collector`
+- After any config change, restart: `cd otel-collector && docker compose restart otel-collector`

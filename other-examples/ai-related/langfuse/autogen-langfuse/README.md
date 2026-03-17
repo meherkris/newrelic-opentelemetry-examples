@@ -157,3 +157,23 @@ Each agent turn includes OpenAI LLM call spans (via `OpenAIInstrumentor`) with `
 ## OTel Collector configuration
 
 The [otel-config.yaml](otel-collector/otel-config.yaml) uses a routing-only configuration — no attribute transformations are needed because Autogen with `OpenAIInstrumentor` produces OTel GenAI semantic convention attributes natively. Traces are routed to New Relic.
+
+## Port Reference
+
+- **8000** — FastAPI app
+- **4317** — OTEL Collector gRPC
+- **4318** — OTEL Collector HTTP
+
+## Troubleshooting
+
+**No spans in collector logs**
+- Check `OTEL_EXPORTER_OTLP_ENDPOINT` includes the full path: `http://localhost:4318/v1/traces`
+
+**No data in New Relic**
+- Verify `NEW_RELIC_LICENSE_KEY` is set in the collector environment
+- Check collector logs: `cd otel-collector && docker compose logs otel-collector`
+- Wait 3-4 minutes for data to appear
+
+**Collector fails to start**
+- Check config syntax: `cd otel-collector && docker compose logs otel-collector`
+- After any config change, restart: `cd otel-collector && docker compose restart otel-collector`

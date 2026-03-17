@@ -41,7 +41,7 @@ def subtract_numbers(a: int, b: int) -> str:
 # --- Set up telemetry ---
 
 strands_telemetry = StrandsTelemetry()
-strands_telemetry.setup_otlp_exporter(endpoint=otel_endpoint + "/v1/traces")
+strands_telemetry.setup_otlp_exporter(endpoint=otel_endpoint)
 strands_telemetry.setup_meter(
     enable_console_exporter=False,
     enable_otlp_exporter=True,

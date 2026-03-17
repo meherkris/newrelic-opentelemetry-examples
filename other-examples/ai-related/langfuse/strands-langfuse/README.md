@@ -164,3 +164,23 @@ The [otel-config.yaml](otel-collector/otel-config.yaml) uses a `transform/gen_ai
 The `gen_ai.response.finish_reasons` attribute is extracted at the **span** context level using OTTL's `ExtractPatterns` function. It parses the `finish_reason` field from the JSON-encoded `gen_ai.output.messages` attribute and promotes it to a top-level span attribute for easier querying.
 
 This requires `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` to be set in the application environment (already configured in `.env.template`).
+
+## Port Reference
+
+- **8000** — FastAPI app
+- **4317** — OTEL Collector gRPC
+- **4318** — OTEL Collector HTTP
+
+## Troubleshooting
+
+**No spans in collector logs**
+- Check `OTEL_EXPORTER_OTLP_ENDPOINT` includes the full path: `http://localhost:4318/v1/traces`
+
+**No data in New Relic**
+- Verify `NEW_RELIC_LICENSE_KEY` is set in the collector environment
+- Check collector logs: `cd otel-collector && docker compose logs otel-collector`
+- Wait 3-4 minutes for data to appear
+
+**Collector fails to start**
+- Check config syntax: `cd otel-collector && docker compose logs otel-collector`
+- After any config change, restart: `cd otel-collector && docker compose restart otel-collector`

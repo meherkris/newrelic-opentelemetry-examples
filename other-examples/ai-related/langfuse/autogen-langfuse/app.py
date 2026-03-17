@@ -23,7 +23,7 @@ langfuse = get_client()
 # Add OTLP exporter to send all spans to the collector
 tracer_provider = trace.get_tracer_provider()
 otlp_exporter = OTLPSpanExporter(
-    endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") + "/v1/traces"
+    endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
 )
 tracer_provider.add_span_processor(BatchSpanProcessor(otlp_exporter))
 OpenAIInstrumentor().instrument()
