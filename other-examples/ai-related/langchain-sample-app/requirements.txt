@@ -1,0 +1,26 @@
+# Core Framework & LLM
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-core>=0.3.0
+
+# Web Server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic>=2.7.4,<3.0.0
+
+# Environment & Utilities
+python-dotenv
+setuptools<70
+
+# Telemetry & Instrumentation
+opentelemetry-api>=1.38.0,<2.0.0
+opentelemetry-sdk>=1.38.0,<2.0.0
+opentelemetry-exporter-otlp>=1.38.0,<2.0.0
+opentelemetry-exporter-otlp-proto-grpc>=1.38.0,<2.0.0
+opentelemetry-exporter-otlp-proto-http>=1.38.0,<2.0.0
+opentelemetry-semantic-conventions>=0.59b0
+opentelemetry-instrumentation>=0.59b0
+opentelemetry-instrumentation-langchain>=0.59b0
+
+# SSL Compatibility - fix for LibreSSL 2.8.3 on macOS
+urllib3<2
