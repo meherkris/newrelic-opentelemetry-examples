@@ -34,15 +34,6 @@ processors:
         - 'set(attributes["gen_ai.agent.name"], attributes["traceloop.workflow.name"]) where attributes["traceloop.span.kind"] == "workflow"'
           # Set tool name only for actual tool execution
         - 'set(attributes["gen_ai.tool.name"], attributes["traceloop.entity.name"]) where attributes["traceloop.span.kind"] == "tool"'
-        
-      
-
-
-
-       
-
-    
-          
           
 exporters:
   # New Relic exporter

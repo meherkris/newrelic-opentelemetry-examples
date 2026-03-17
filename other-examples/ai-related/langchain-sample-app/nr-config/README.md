@@ -54,7 +54,7 @@ See the full example in [`langchain_app.py`](../langchain_app.py).
 
 ## Step 2 — Set `gen_ai.output.messages` manually
 
-`LangchainInstrumentor` does not automatically set `gen_ai.output.messages`, which New Relic AI Monitoring requires to display the assistant's response. Wrap each agent invocation in a custom root span and set this attribute:
+`LangchainInstrumentor` does not automatically set `gen_ai.output.messages`, which New Relic AI Monitoring requires to display the agent's response. Wrap each agent invocation in a custom root span and set this attribute:
 
 ```python
 import json

@@ -1,4 +1,3 @@
-#Without using gen-ai normaliser
 services:
   langchain-test-collector:
     image: otel/opentelemetry-collector-contrib:0.91.0
