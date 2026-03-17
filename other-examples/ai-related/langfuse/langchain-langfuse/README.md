@@ -48,6 +48,8 @@ cp .env.template .env
 # Edit .env with your API keys
 ```
 
+> **Note:** The `OTEL_SERVICE_NAME` environment variable in `.env.template` is automatically picked up by the OpenTelemetry SDK — no explicit code is needed to set the service name in the application.
+
 ### 2. Start the OpenTelemetry Collector
 
 ```shell
@@ -161,7 +163,11 @@ The [otel-config.yaml](otel-collector/otel-config.yaml) transforms Langfuse-spec
 |---|---|---|
 | `langfuse.observation.model.name` | `gen_ai.request.model`, `gen_ai.response.model` | Model name |
 | `langfuse.observation.metadata.ls_provider` | `gen_ai.system` | e.g., "openai" |
+| `langfuse.observation.input` | `gen_ai.input.messages` | Raw input content |
+| `langfuse.observation.output` | `gen_ai.output.messages` | Raw output content |
 | `langfuse.observation.usage_details` | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | Parsed from JSON |
 | `langfuse.observation.type` == "tool" | `gen_ai.tool.name` | Extracted from span name |
 | `langfuse.observation.type` == "agent" | `gen_ai.agent.name` | Extracted from span name |
-| Response metadata | `gen_ai.response.id`, `gen_ai.response.finish_reasons` | Extracted from output JSON |
+| `langfuse.observation.metadata.tool_call_id` | `gen_ai.tool.id` | Tool call identifier |
+| Response metadata (from output JSON) | `gen_ai.response.id` | Extracted from `response_metadata.id` on model chain spans |
+| Response metadata (from output JSON) | `gen_ai.response.finish_reasons` | Extracted from `response_metadata.finish_reason` on model chain spans |

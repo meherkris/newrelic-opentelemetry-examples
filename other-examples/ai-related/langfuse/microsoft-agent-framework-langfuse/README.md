@@ -50,6 +50,8 @@ cp .env.template .env
 # Edit .env with your API keys
 ```
 
+> **Note:** The `OTEL_SERVICE_NAME` environment variable in `.env.template` is automatically picked up by the OpenTelemetry SDK — no explicit code is needed to set the service name in the application.
+
 ### 2. Start the OpenTelemetry Collector
 
 ```shell

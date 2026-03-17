@@ -44,7 +44,7 @@ def add_numbers(a: int, b: int) -> int:
     return a + b
 
 def subtract_numbers(a: int, b: int) -> int:
-    """Subtract two numbers together and return the result."""
+    """Subtract two numbers and return the result."""
     return a - b    
 
 # Create agent with the tool

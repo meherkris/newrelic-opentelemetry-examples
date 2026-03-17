@@ -1,6 +1,6 @@
 # AI Sample App - Strands Agent with Langfuse and OpenTelemetry (Python)
 
-This is a sample AI application demonstrating **AI Agent observability** using [Strands Agents](https://github.com/strands-agents/sdk-python), [Langfuse SDK](https://langfuse.com/docs), and [OpenTelemetry](https://opentelemetry.io/). It shows how to instrument a FastAPI application with an agent that uses tools, trace the complete agent execution flow, and export telemetry data through an OpenTelemetry Collector to New Relic.
+This is a sample AI application demonstrating **AI Agent observability** using [Strands Agents](https://github.com/strands-agents/sdk-python) and [OpenTelemetry](https://opentelemetry.io/). It shows how to instrument a FastAPI application with an agent that uses tools, trace the complete agent execution flow, and export telemetry data through an OpenTelemetry Collector to New Relic.
 
  For more details on the Langfuse Strands Agents integration, see the [official Langfuse documentation](https://langfuse.com/integrations/frameworks/strands-agents) and the [Strands observability sample notebook](https://github.com/strands-agents/samples/blob/c4b447332d87429c5f986e948db91a454d8135f3/01-tutorials/01-fundamentals/08-observability-and-evaluation/Observability-and-Evaluation-sample.ipynb)
 
@@ -22,7 +22,6 @@ The Strands `StrandsTelemetry` captures:
 - [A New Relic account](https://one.newrelic.com/)
 - [A New Relic license key](https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/#license-key)
 - [An OpenAI API key](https://platform.openai.com/api-keys)
-- [A Langfuse account](https://langfuse.com/) with public and secret keys
 
 ## Project structure
 
@@ -47,6 +46,8 @@ Create your `.env` file from the template and update the values:
 cp .env.template .env
 # Edit .env with your API keys
 ```
+
+> **Note:** The `OTEL_SERVICE_NAME` environment variable in `.env.template` is automatically picked up by the OpenTelemetry SDK — no explicit code is needed to set the service name in the application.
 
 ### 2. Start the OpenTelemetry Collector
 

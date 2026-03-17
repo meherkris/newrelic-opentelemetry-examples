@@ -4,7 +4,7 @@ This is a sample AI application demonstrating **AI Agent observability** using [
 
  For more details on the Langfuse LlamaIndex integration, see the [official Langfuse documentation](https://langfuse.com/integrations/frameworks/llamaindex)
 
-The application exposes a `/chat` endpoint backed by a LlamaIndex `ReActAgent` with custom tools (`add`, `subtract`). The `LlamaIndexInstrumentor` captures detailed traces using OpenInference semantic conventions, and the OTel Collector transforms them to [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) before forwarding to New Relic and Langfuse.
+The application exposes a `/chat` endpoint backed by a LlamaIndex `ReActAgent` with custom tools (`add`, `subtract`). The `LlamaIndexInstrumentor` captures detailed traces using OpenInference semantic conventions, and the OTel Collector transforms them to [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) before forwarding to New Relic.
 
 ## What telemetry is captured?
 
@@ -48,6 +48,8 @@ Create your `.env` file from the template and update the values:
 cp .env.template .env
 # Edit .env with your API keys
 ```
+
+> **Note:** The `OTEL_SERVICE_NAME` environment variable in `.env.template` is automatically picked up by the OpenTelemetry SDK — no explicit code is needed to set the service name in the application.
 
 ### 2. Start the OpenTelemetry Collector
 
@@ -144,14 +146,13 @@ You can add this tag via **New Relic > All Entities > (your service) > ... > Add
 
 ## Trace structure
 
-For a typical agent request like "What is 4 multiply with 2?", you'll see **15 spans** representing the agent workflow:
+For a typical agent request like "What is 100 + 51?", you'll see **15 spans** representing the agent workflow:
 
 - **8 CHAIN spans** (workflow orchestration): `ReActAgent.run`, `init_run`, `setup_agent`, `run_agent_step`, `parse_agent_output`, `call_tool`, `aggregate_tool_results`
 - **4 LLM spans** (OpenAI interactions): `_prepare_chat_with_tools` and `astream_chat` for each LLM call
 - **1 TOOL span**: `FunctionTool.acall` (add or subtract execution)
 - **1 Root span**: `calculator-agent` (Langfuse context)
 
-Token usage per request is approximately 127 input + 17 output tokens (tool selection) and 152 input + 10 output tokens (final response), totaling ~306 tokens.
 
 > **Note**: The high span count (15) is normal for LlamaIndex. It provides deep visibility into the agent's workflow but creates more spans than other frameworks.
 

@@ -4,7 +4,7 @@ This is a sample AI application demonstrating **AI Agent observability** using [
 
  For more details on the Langfuse Autogen integration, see the [official Langfuse documentation](https://langfuse.com/integrations/frameworks/autogen)
 
-The application exposes a `/chat` endpoint backed by two collaborative Autogen agents (`MathAgent` and `ValidatorAgent`) orchestrated via `RoundRobinGroupChat`. The Langfuse SDK captures detailed traces of the entire multi-agent execution flow (including agent communication, tool calls, and LLM interactions via `OpenAIInstrumentor`), and exports them via OTLP to a local collector. The collector routes traces to both New Relic and Langfuse.
+The application exposes a `/chat` endpoint backed by two collaborative Autogen agents (`MathAgent` and `ValidatorAgent`) orchestrated via `RoundRobinGroupChat`. The Langfuse SDK captures detailed traces of the entire multi-agent execution flow (including agent communication, tool calls, and LLM interactions via `OpenAIInstrumentor`), and exports them via OTLP to a local collector. The collector routes traces to New Relic.
 
 ## What telemetry is captured?
 
@@ -47,6 +47,8 @@ Create your `.env` file from the template and update the values:
 cp .env.template .env
 # Edit .env with your API keys
 ```
+
+> **Note:** The `OTEL_SERVICE_NAME` environment variable in `.env.template` is automatically picked up by the OpenTelemetry SDK — no explicit code is needed to set the service name in the application.
 
 ### 2. Start the OpenTelemetry Collector
 
@@ -154,4 +156,4 @@ Each agent turn includes OpenAI LLM call spans (via `OpenAIInstrumentor`) with `
 
 ## OTel Collector configuration
 
-The [otel-config.yaml](otel-collector/otel-config.yaml) uses a routing-only configuration — no attribute transformations are needed because Autogen with `OpenAIInstrumentor` produces OTel GenAI semantic convention attributes natively. Traces are routed to both New Relic and Langfuse.
+The [otel-config.yaml](otel-collector/otel-config.yaml) uses a routing-only configuration — no attribute transformations are needed because Autogen with `OpenAIInstrumentor` produces OTel GenAI semantic convention attributes natively. Traces are routed to New Relic.
