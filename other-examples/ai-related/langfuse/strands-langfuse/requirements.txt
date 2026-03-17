@@ -1,0 +1,7 @@
+opentelemetry-exporter-otlp-proto-http
+strands-agents[otel]
+strands-agents-tools
+openai
+python-dotenv
+fastapi
+uvicorn

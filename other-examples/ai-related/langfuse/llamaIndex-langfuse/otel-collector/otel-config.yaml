@@ -1,0 +1,150 @@
+extensions:
+  health_check: {}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: otel-collector:4317
+      http:
+        endpoint: otel-collector:4318
+
+processors:
+  batch:
+
+  resource/ai_enabled:
+    attributes:
+      - key: aiEnabledApp
+        value: "true"
+        action: insert
+
+  attributes/normalize_genai:
+    actions:
+      # ===================================================================
+      # LLM SPANS: Chat/Completion Operations
+      # ===================================================================
+
+      - key: gen_ai.system
+        from_attribute: llm.system
+        action: upsert
+
+      - key: gen_ai.request.model
+        from_attribute: llm.model_name
+        action: upsert
+      - key: gen_ai.response.model
+        from_attribute: llm.model_name
+        action: upsert
+
+      # Token Usage (Recommended)
+      - key: gen_ai.usage.input_tokens
+        from_attribute: llm.token_count.prompt
+        action: upsert
+      - key: gen_ai.usage.output_tokens
+        from_attribute: llm.token_count.completion
+        action: upsert
+      - key: gen_ai.usage.total_tokens
+        from_attribute: llm.token_count.total
+        action: upsert
+
+      # ===================================================================
+      # TOOL SPANS: Function/Extension/Datastore Operations
+      # ===================================================================
+
+      # Tool Attributes (Recommended)
+      - key: gen_ai.tool.name
+        from_attribute: tool.name
+        action: upsert
+      - key: gen_ai.tool.description
+        from_attribute: tool.description
+        action: upsert
+
+      # AGENT SPANS: Orchestration/Workflow Operations
+      # Provider for agent spans (Required)
+      - key: gen_ai.provider.name
+        from_attribute: llm.provider
+        action: upsert
+
+  # =========================================================================
+  # STEP 2: Transform and enrich spans with OTTL statements
+  # =========================================================================
+
+  transform/semantic_conventions:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+
+          - set(attributes["gen_ai.operation.name"], "chat")
+            where attributes["openinference.span.kind"] == "LLM"
+
+          - set(attributes["gen_ai.system_instructions"], attributes["llm.input_messages.0.message.content"])
+            where attributes["llm.input_messages.0.message.role"] == "system"
+
+          # REQUIRED: gen_ai.operation.name (for agent spans)
+          - set(attributes["gen_ai.operation.name"], "agent")
+            where attributes["openinference.span.kind"] == "CHAIN"
+
+          # REQUIRED: gen_ai.provider.name (for agent spans)
+          - set(attributes["gen_ai.provider.name"], "llamaindex")
+            where attributes["openinference.span.kind"] == "CHAIN" and attributes["gen_ai.provider.name"] == nil
+
+          # CONDITIONALLY REQUIRED: gen_ai.agent.name (from span name)
+          - set(attributes["gen_ai.agent.name"], name)
+            where attributes["openinference.span.kind"] == "CHAIN"
+
+          # REQUIRED: gen_ai.operation.name (for tool spans)
+          - set(attributes["gen_ai.operation.name"], "tool")
+            where attributes["openinference.span.kind"] == "TOOL"
+
+          # CONDITIONALLY REQUIRED: error.type (if operation ended in error)
+          - set(attributes["error.type"], status.message)
+            where attributes["openinference.span.kind"] == "TOOL" and status.code == STATUS_CODE_ERROR
+
+          # RECOMMENDED: gen_ai.tool.type (default to "function" for FunctionTool)
+          - set(attributes["gen_ai.tool.type"], "function")
+            where attributes["openinference.span.kind"] == "TOOL"
+
+          # OPT-IN: gen_ai.tool.call.arguments (extract from input.value)
+          # Note: input.value already contains the arguments in structured format
+          - set(attributes["gen_ai.tool.call.arguments"], attributes["input.value"])
+            where attributes["openinference.span.kind"] == "TOOL" and attributes["input.value"] != nil
+
+          # OPT-IN: gen_ai.tool.call.result (extract from output.value)
+          # Note: output.value already contains the result in structured format
+          - set(attributes["gen_ai.tool.call.result"], attributes["output.value"])
+            where attributes["openinference.span.kind"] == "TOOL" and attributes["output.value"] != nil
+         
+
+exporters:
+  otlp_http/newrelic:
+  # For EU accounts, use: https://otlp.eu01.nr-data.net
+  # docs: https://docs.newrelic.com/docs/more-integrations/open-source-telemetry-integrations/opentelemetry/best-practices/opentelemetry-otlp/#configure-endpoint-port-protocol
+    endpoint: https://otlp.nr-data.net
+    headers:
+      api-key: "${env:NEW_RELIC_API_KEY}"
+    compression: gzip
+
+  # Debug exporter to see data in logs (optional)
+  debug:
+    verbosity: detailed
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors:
+        - attributes/normalize_genai     
+        - transform/semantic_conventions                          
+        - resource/ai_enabled
+        - batch
+      exporters: [otlp_http/newrelic, debug]
+
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]

@@ -1,0 +1,7 @@
+langfuse>=3.0.0
+opentelemetry-exporter-otlp-proto-grpc
+agent-framework
+python-dotenv
+fastapi
+uvicorn
+

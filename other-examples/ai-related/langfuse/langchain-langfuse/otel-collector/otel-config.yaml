@@ -1,0 +1,94 @@
+extensions:
+  health_check: {}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: otel-collector:4317
+      http:
+        endpoint: otel-collector:4318
+
+processors:
+  batch:
+
+  resource/ai_enabled:
+    attributes:
+      - key: aiEnabledApp
+        value: "true"
+        action: insert
+
+  # Transform Langfuse attributes to OTel GenAI semantic conventions
+  attributes/langfuse_to_genai:
+    actions:
+      - key: gen_ai.request.model
+        from_attribute: langfuse.observation.model.name
+        action: upsert
+      - key: gen_ai.response.model
+        from_attribute: langfuse.observation.model.name
+        action: upsert
+      - key: gen_ai.system
+        from_attribute: langfuse.observation.metadata.ls_provider
+        action: upsert
+
+      - key: gen_ai.input.messages
+        from_attribute: langfuse.observation.input
+        action: upsert
+      - key: gen_ai.output.messages
+        from_attribute: langfuse.observation.output
+        action: upsert
+
+  # Transform processor for complex mappings using OTTL
+  transform/langfuse_to_genai:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+
+          - set(attributes["gen_ai.tool.name"], name)
+            where attributes["langfuse.observation.type"] == "tool"
+
+          - set(attributes["gen_ai.agent.name"], name)
+            where attributes["langfuse.observation.type"] == "agent"
+
+          - set(attributes["gen_ai.tool.id"], attributes["langfuse.observation.metadata.tool_call_id"])
+            where attributes["langfuse.observation.metadata.tool_call_id"] != nil
+
+          - set(attributes["gen_ai.usage.input_tokens"], Int(ParseJSON(attributes["langfuse.observation.usage_details"])["input"])) 
+            where attributes["langfuse.observation.usage_details"] != nil
+          
+          - set(attributes["gen_ai.usage.output_tokens"], Int(ParseJSON(attributes["langfuse.observation.usage_details"])["output"])) 
+            where attributes["langfuse.observation.usage_details"] != nil
+
+          - set(attributes["gen_ai.response.id"], ParseJSON(attributes["langfuse.observation.output"])[0]["update"]["messages"][0]["response_metadata"]["id"])
+            where attributes["langfuse.observation.type"] == "chain" and attributes["langfuse.observation.metadata.langgraph_node"] == "model" and ParseJSON(attributes["langfuse.observation.output"])[0]["update"]["messages"][0]["response_metadata"]["id"] != nil
+
+          - set(attributes["gen_ai.response.finish_reasons"], [ParseJSON(attributes["langfuse.observation.output"])[0]["update"]["messages"][0]["response_metadata"]["finish_reason"]])
+            where attributes["langfuse.observation.type"] == "chain" and attributes["langfuse.observation.metadata.langgraph_node"] == "model" and ParseJSON(attributes["langfuse.observation.output"])[0]["update"]["messages"][0]["response_metadata"]["finish_reason"] != nil
+
+exporters:
+  otlp_http/newrelic:
+  # For EU accounts, use: https://otlp.eu01.nr-data.net
+  # docs: https://docs.newrelic.com/docs/more-integrations/open-source-telemetry-integrations/opentelemetry/best-practices/opentelemetry-otlp/#configure-endpoint-port-protocol
+    endpoint: https://otlp.nr-data.net
+    headers:
+      api-key: "${env:NEW_RELIC_API_KEY}"
+    compression: gzip
+      
+  # Debug exporter to see data in logs (optional)
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource/ai_enabled, attributes/langfuse_to_genai, transform/langfuse_to_genai, batch]
+      exporters: [otlp_http/newrelic, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp_http/newrelic]
