@@ -1,0 +1,14 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./otel-config.yaml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - "4318:4318"   # OTLP HTTP
+      - "4317:4317"   # OTLP gRPC
+      - "13133:13133" # Health check
+      - "55679:55679" # zpages (debug UI)
+      - "1777:1777"   # pprof (performance profiling)
+    environment:
+      - NEW_RELIC_API_KEY=${NEW_RELIC_API_KEY}
+    restart: unless-stopped
