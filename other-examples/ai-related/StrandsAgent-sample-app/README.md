@@ -8,11 +8,15 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
 
 ## Tech Stack
 
-- **Agent Framework:** Strands Agents (with OpenAI provider)
-- **LLM:** OpenAI GPT-4o
-- **Web Framework:** FastAPI + Uvicorn
-- **Observability:** OpenTelemetry SDK → OTel Collector → New Relic
-- **Language:** Python 3.12
+- **Agent Framework:** Strands Agents `1.52.0` (with OpenAI provider)
+- **LLM:** OpenAI GPT-4o (via `openai` SDK `1.109.1`)
+- **Web Framework:** FastAPI `0.135.1` + Uvicorn `0.42.0`
+- **Validation:** Pydantic `2.12.5`
+- **Config:** python-dotenv `1.2.2`
+- **Observability:** OpenTelemetry SDK → OTel Collector (`otel/opentelemetry-collector-contrib:0.91.0`) → New Relic
+- **Language:** Python `3.12.12`
+
+`requirements.txt` doesn't pin exact versions (`strands-agents[openai]`, unversioned) — the numbers above are what's currently installed in this project's virtual environment. Run `pip show strands-agents` (or any package above) to check what you have.
 
 ## Project Structure
 
@@ -56,31 +60,18 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
    NEW_RELIC_LICENSE_KEY=<your-new-relic-license-key>
    OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
    OTEL_SERVICE_NAME=strands-math-tutor
-   OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+   OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_span_attributes_only
    ```
 
-4. **Enable New Relic AI Monitoring:**
+   `gen_ai_span_attributes_only` makes Strands record `gen_ai.input.messages` / `gen_ai.output.messages` as attributes directly on the `chat`/`invoke_agent` spans.
 
-   To surface your app in New Relic's **AI Monitoring** section, add `aiEnabledApp: "true"` to the `resource` processor in your OTel Collector config ([`nr-config/strands-otel-collector-config.yaml`](nr-config/strands-otel-collector-config.yaml)):
-
-   ```yaml
-   processors:
-     resource:
-       attributes:
-         - key: aiEnabledApp
-           value: "true"
-           action: insert
-   ```
-
-   > This is required for OTel-instrumented apps. Without it, spans arrive in New Relic but the app will not appear in the AI Monitoring entity list. Apps using the New Relic agent get this automatically.
-
-5. **Start the OpenTelemetry Collector:**
+4. **Start the OpenTelemetry Collector:**
 
    ```bash
    docker-compose -f docker-compose-strands.yaml up -d
    ```
 
-6. **Run the application:**
+5. **Run the application:**
 
    ```bash
    uvicorn strands_app:app --reload
@@ -141,7 +132,7 @@ FastAPI App → Strands Telemetry (OTel SDK) → OTel Collector → New Relic
 The collector runs as a Docker container and is configured with:
 
 - **Receivers:** OTLP over gRPC (`:4317`) and HTTP (`:4318`)
-- **Processors:** Memory limiter, batching, resource attributes, Gen AI semantic convention transforms
+- **Processors:** Memory limiter, resource attributes
 - **Exporters:** New Relic (OTLP/HTTP), console logging, optional file output
 
 ### Ports
@@ -152,3 +143,14 @@ The collector runs as a Docker container and is configured with:
 | 4317  | gRPC       | OTel Collector OTLP  |
 | 4318  | HTTP       | OTel Collector OTLP  |
 | 55679 | HTTP       | ZPages (debug UI)    |
+
+### Known gaps — fields that don't show up
+
+| Field | Why it's not visible |
+|---|---|
+| **Finish reason** | Not captured. It's not extracted into its own attribute, so it isn't visible in NRQL or the New Relic UI. |
+| **Response model** | Not captured. |
+| **Response ID** | Not captured. |
+| **Request ID** | Not captured. |
+| **Host** | Not captured. |
+| **Conversation ID** | Not captured. |
