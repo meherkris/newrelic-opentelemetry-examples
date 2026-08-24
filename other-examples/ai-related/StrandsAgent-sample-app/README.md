@@ -58,12 +58,14 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
    ```env
    OPENAI_API_KEY=<your-openai-api-key>
    NEW_RELIC_LICENSE_KEY=<your-new-relic-license-key>
-   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-   OTEL_SERVICE_NAME=strands-math-tutor
    OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_span_attributes_only
    ```
 
+   See [`.env.example`](.env.example) for a template.
+
    `gen_ai_span_attributes_only` makes Strands record `gen_ai.input.messages` / `gen_ai.output.messages` as attributes directly on the `chat`/`invoke_agent` spans.
+
+   > **Note:** `strands_app.py` hardcodes the OTLP exporter endpoint (`http://localhost:4318/v1/traces`) and the collector's `resource` processor force-sets `service.name` to `strands-math-tutor` — so `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` env vars have no effect here even though the underlying SDK/library support them.
 
 4. **Start the OpenTelemetry Collector:**
 
