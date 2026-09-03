@@ -2,6 +2,9 @@
 # workflow_dispatch to work properly
 name: Repolinter Action
 
+permissions:
+  contents: read
+
 on:
   workflow_dispatch:
   pull_request:
@@ -15,18 +18,18 @@ jobs:
     steps:
       - name: Test Default Branch
         id: default-branch
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const data = await github.rest.repos.get(context.repo)
             return data.data && data.data.default_branch === context.ref.split('/').slice(-1)[0]
       - name: Checkout Self
         if: ${{ steps.default-branch.outputs.result == 'true' }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Run Repolinter
         if: ${{ steps.default-branch.outputs.result == 'true' }}
         uses: newrelic/repolinter-action@v1
         with:
           config_url: https://raw.githubusercontent.com/newrelic/.github/main/repolinter-rulesets/example-code.yml
-          output_type: issue
+          output_type: exit-code
 

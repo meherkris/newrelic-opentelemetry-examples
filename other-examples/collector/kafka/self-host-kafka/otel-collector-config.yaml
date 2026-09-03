@@ -1,0 +1,208 @@
+receivers:
+  # OTLP receiver for Kafka and JMX metrics from Java agents and application telemetry
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+
+  # Kafka metrics receiver for cluster-level metrics
+  kafkametrics:
+    brokers: ${env:KAFKA_BOOTSTRAP_BROKER_ADDRESSES}
+    protocol_version: 2.0.0
+    scrapers:
+      - brokers
+      - topics
+      - consumers
+    collection_interval: ${env:KAFKA_METRICS_COLLECTION_INTERVAL}
+    # Collect all topics (filtering will happen in the processor)
+    topic_match: "^[^_].*$"
+    metrics:
+      kafka.topic.min_insync_replicas:
+        enabled: true
+      kafka.topic.replication_factor:
+        enabled: true
+      kafka.partition.replicas:
+        enabled: false
+      kafka.partition.oldest_offset:
+        enabled: false
+      kafka.partition.current_offset:
+        enabled: false
+
+processors:
+  batch/aggregation:
+    send_batch_size: 1024
+    timeout: 30s
+
+  batch/apps:
+    send_batch_size: 1024
+    timeout: 5s
+
+  resourcedetection:
+    detectors: [env, ec2, system]
+    system:
+      resource_attributes:
+        host.name:
+          enabled: true
+        host.id:
+          enabled: true
+
+  resource:
+    attributes:
+      - action: insert
+        key: kafka.cluster.name
+        value: ${env:KAFKA_CLUSTER_NAME}
+
+  transform/remove_broker_id:
+    metric_statements:
+      # Remove broker.id from resource attributes for cluster-level metrics
+      - context: resource
+        statements:
+          - delete_key(attributes, "broker.id")
+
+  transform/remove_extra_attributes:
+    metric_statements:
+      - context: resource
+        statements:
+          # Delete all attributes starting with "process."
+          - delete_matching_keys(attributes, "^process\\..*")
+          # Delete all attributes starting with "telemetry."
+          - delete_matching_keys(attributes, "^telemetry\\..*")
+          - delete_key(attributes, "host.arch")
+          - delete_key(attributes, "os.description")
+          - delete_key(attributes, "host.image.id")
+          - delete_key(attributes, "host.type")
+          - delete_matching_keys(attributes, "^cloud\\..*")
+          - delete_key(attributes, "service.instance.id") where IsMatch(attributes["service.name"], "^unknown_service:")
+          - delete_key(attributes, "service.name") where IsMatch(attributes["service.name"], "^unknown_service:")
+
+  # Filter internal topics from JMX per-topic metrics
+  filter/internal_topics:
+    metrics:
+      datapoint:
+        # Drop datapoints where topic attribute starts with "__"
+        - 'attributes["topic"] != nil and IsMatch(attributes["topic"], "^__.*")'
+
+  filter/include_cluster_metrics:
+    metrics:
+      include:
+        match_type: regexp
+        metric_names:
+          - "kafka\\.partition\\.offline"
+          - "kafka\\.(leader|unclean)\\.election\\.rate"
+          - "kafka\\.partition\\.non_preferred_leader"
+          - "kafka\\.broker\\.fenced\\.count"
+          - "kafka\\.cluster\\.partition\\.count"
+          - "kafka\\.cluster\\.topic\\.count"
+
+  filter/exclude_cluster_metrics:
+    metrics:
+      exclude:
+        match_type: regexp
+        metric_names:
+          - "kafka\\.partition\\.offline"
+          - "kafka\\.(leader|unclean)\\.election\\.rate"
+          - "kafka\\.partition\\.non_preferred_leader"
+          - "kafka\\.broker\\.fenced\\.count"
+          - "kafka\\.cluster\\.partition\\.count"
+          - "kafka\\.cluster\\.topic\\.count"
+
+  transform/des_units:
+    metric_statements:
+      - context: metric
+        statements:
+          - set(description, "") where description != ""
+          - set(unit, "") where unit != ""
+
+  cumulativetodelta:
+
+  groupbyattrs/cluster:
+    keys: [kafka.cluster.name]
+
+  metricstransform/cluster_max:
+    transforms:
+      - include: "kafka\\.partition\\.offline|kafka\\.leader\\.election\\.rate|kafka\\.unclean\\.election\\.rate|kafka\\.partition\\.non_preferred_leader|kafka\\.broker\\.fenced\\.count|kafka\\.cluster\\.partition\\.count|kafka\\.cluster\\.topic\\.count"
+        match_type: regexp
+        action: update
+        operations:
+          - action: aggregate_labels
+            aggregation_type: max
+            label_set: []
+
+  metricstransform/kafka_topic_sum_aggregation:
+    transforms:
+      - include: kafka.partition.replicas_in_sync
+        action: insert
+        new_name: kafka.partition.replicas_in_sync.total
+        operations:
+          - action: aggregate_labels
+            label_set: [topic]
+            aggregation_type: sum
+
+      - include: kafka.partition.replicas
+        action: insert
+        new_name: kafka.partition.replicas.total
+        operations:
+          - action: aggregate_labels
+            label_set: [topic]
+            aggregation_type: sum
+
+  filter/remove_partition_level_replicas:
+    metrics:
+      exclude:
+        match_type: strict
+        metric_names:
+          - kafka.partition.replicas_in_sync
+
+exporters:
+  otlp/newrelic:
+    endpoint: ${env:NEW_RELIC_OTLP_ENDPOINT}
+    headers:
+      api-key: ${env:NEW_RELIC_LICENSE_KEY}
+    compression: gzip
+    timeout: 30s
+
+service:
+  pipelines:
+    # Broker metrics pipeline (excludes cluster-level metrics)
+    metrics/broker:
+      receivers: [otlp, kafkametrics]
+      processors:
+        - resourcedetection
+        - resource
+        - filter/exclude_cluster_metrics
+        - filter/internal_topics
+        - transform/remove_extra_attributes
+        - transform/des_units
+        - cumulativetodelta
+        - metricstransform/kafka_topic_sum_aggregation
+        - filter/remove_partition_level_replicas
+        - batch/aggregation
+      exporters: [otlp/newrelic]
+
+    # Cluster metrics pipeline (only cluster-level metrics, no broker.id)
+    metrics/cluster:
+      receivers: [otlp]
+      processors:
+        - resourcedetection
+        - resource
+        - filter/include_cluster_metrics
+        - transform/remove_broker_id
+        - transform/remove_extra_attributes
+        - transform/des_units
+        - cumulativetodelta
+        - groupbyattrs/cluster
+        - metricstransform/cluster_max
+        - batch/aggregation
+      exporters: [otlp/newrelic]
+
+    # APM traces pipeline (producer + consumer spans via OTel Java Agent)
+    traces/apps:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch/apps]
+      exporters: [otlp/newrelic]
+
+    # APM logs pipeline (producer + consumer logs via OTel Java Agent)
+    logs/apps:
+      receivers: [otlp]
+      processors: [resourcedetection, resource, batch/apps]
+      exporters: [otlp/newrelic]

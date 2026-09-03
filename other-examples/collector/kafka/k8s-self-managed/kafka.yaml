@@ -1,0 +1,644 @@
+# ============================================================
+# Kafka Cluster — Kubernetes Manifests
+# ============================================================
+# KRaft mode (no ZooKeeper), 2 combined controller+broker pods.
+# OTel Java Agent injected via init container on each pod.
+#
+# To customize: edit KAFKA_CLUSTER_NAME below (must match collector.yaml).
+#
+# Apply:
+#   kubectl apply -f kafka.yaml
+# ============================================================
+
+# ── Namespace ─────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+
+---
+# ── JMX custom config (OTel Java Agent MBean rules) ──────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-jmx-custom-config
+  namespace: kafka
+data:
+  jmx-custom-config.yaml: |
+    rules:
+      # Per-topic custom metrics
+      - bean: kafka.server:type=BrokerTopicMetrics,name=MessagesInPerSec,topic=*
+        metricAttribute:
+          topic: param(topic)
+        mapping:
+          Count:
+            metric: kafka.prod.msg.count
+            type: counter
+            desc: The number of messages per topic
+            unit: "{message}"
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=BytesInPerSec,topic=*
+        metricAttribute:
+          topic: param(topic)
+          direction: const(in)
+        mapping:
+          Count:
+            metric: kafka.topic.io
+            type: counter
+            desc: The bytes received or sent per topic
+            unit: By
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=BytesOutPerSec,topic=*
+        metricAttribute:
+          topic: param(topic)
+          direction: const(out)
+        mapping:
+          Count:
+            metric: kafka.topic.io
+            type: counter
+            desc: The bytes received or sent per topic
+            unit: By
+
+      # Cluster-level metrics using controller-based MBeans
+      - bean: kafka.controller:type=KafkaController,name=GlobalTopicCount
+        mapping:
+          Value:
+            metric: kafka.cluster.topic.count
+            type: gauge
+            desc: The total number of global topics in the cluster
+            unit: "{topic}"
+
+      - bean: kafka.controller:type=KafkaController,name=GlobalPartitionCount
+        mapping:
+          Value:
+            metric: kafka.cluster.partition.count
+            type: gauge
+            desc: The total number of global partitions in the cluster
+            unit: "{partition}"
+
+      - bean: kafka.controller:type=KafkaController,name=FencedBrokerCount
+        mapping:
+          Value:
+            metric: kafka.broker.fenced.count
+            type: gauge
+            desc: The number of fenced brokers in the cluster
+            unit: "{broker}"
+
+      - bean: kafka.controller:type=KafkaController,name=PreferredReplicaImbalanceCount
+        mapping:
+          Value:
+            metric: kafka.partition.non_preferred_leader
+            type: gauge
+            desc: The count of topic partitions for which the leader is not the preferred leader
+            unit: "{partition}"
+
+      # Broker-level metrics using ReplicaManager MBeans
+      - bean: kafka.server:type=ReplicaManager,name=UnderMinIsrPartitionCount
+        mapping:
+          Value:
+            metric: kafka.partition.under_min_isr
+            type: gauge
+            desc: The number of partitions where the number of in-sync replicas is less than the minimum
+            unit: "{partition}"
+
+      # Broker uptime metric using JVM Runtime
+      - bean: java.lang:type=Runtime
+        mapping:
+          Uptime:
+            metric: kafka.broker.uptime
+            type: gauge
+            desc: Broker uptime in milliseconds
+            unit: ms
+
+      # Leader count per broker
+      - bean: kafka.server:type=ReplicaManager,name=LeaderCount
+        mapping:
+          Value:
+            metric: kafka.broker.leader.count
+            type: gauge
+            desc: Number of partitions for which this broker is the leader
+            unit: "{partition}"
+
+      # JVM metrics
+      - bean: java.lang:type=GarbageCollector,name=*
+        mapping:
+          CollectionCount:
+            metric: jvm.gc.collections.count
+            type: counter
+            unit: "{collection}"
+            desc: total number of collections that have occurred
+            metricAttribute:
+              name: param(name)
+
+      - bean: java.lang:type=Memory
+        unit: By
+        prefix: jvm.memory.
+        dropNegativeValues: true
+        mapping:
+          HeapMemoryUsage.max:
+            metric: heap.max
+            desc: current heap usage
+            type: gauge
+          HeapMemoryUsage.used:
+            metric: heap.used
+            desc: current heap usage
+            type: gauge
+
+      - bean: java.lang:type=Threading
+        mapping:
+          ThreadCount:
+            metric: jvm.thread.count
+            type: gauge
+            unit: "{thread}"
+            desc: Total thread count (Kafka typical range 100-300 threads)
+
+      - bean: java.lang:type=OperatingSystem
+        prefix: jvm.
+        dropNegativeValues: true
+        mapping:
+          SystemCpuLoad:
+            metric: system.cpu.utilization
+            type: gauge
+            unit: '1'
+            desc: Recent CPU utilization for whole system (0.0 to 1.0)
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=MessagesInPerSec
+        mapping:
+          Count:
+            metric: kafka.message.count
+            type: counter
+            desc: The number of messages received by the broker
+            unit: "{message}"
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=TotalFetchRequestsPerSec
+        metricAttribute:
+          type: const(fetch)
+        mapping:
+          Count:
+            metric: &metric kafka.request.count
+            type: &type counter
+            desc: &desc The number of requests received by the broker
+            unit: &unit "{request}"
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=TotalProduceRequestsPerSec
+        metricAttribute:
+          type: const(produce)
+        mapping:
+          Count:
+            metric: *metric
+            type: *type
+            desc: *desc
+            unit: *unit
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=FailedFetchRequestsPerSec
+        metricAttribute:
+          type: const(fetch)
+        mapping:
+          Count:
+            metric: &metric kafka.request.failed
+            type: &type counter
+            desc: &desc The number of requests to the broker resulting in a failure
+            unit: &unit "{request}"
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=FailedProduceRequestsPerSec
+        metricAttribute:
+          type: const(produce)
+        mapping:
+          Count:
+            metric: *metric
+            type: *type
+            desc: *desc
+            unit: *unit
+
+      - beans:
+          - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=Produce
+          - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=FetchConsumer
+          - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=FetchFollower
+        metricAttribute:
+          type: param(request)
+        unit: ms
+        mapping:
+          99thPercentile:
+            metric: kafka.request.time.99p
+            type: gauge
+            desc: The 99th percentile time the broker has taken to service requests
+
+      - bean: kafka.network:type=RequestChannel,name=RequestQueueSize
+        mapping:
+          Value:
+            metric: kafka.request.queue
+            type: gauge
+            desc: Size of the request queue
+            unit: "{request}"
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=BytesInPerSec
+        metricAttribute:
+          direction: const(in)
+        mapping:
+          Count:
+            metric: &metric kafka.network.io
+            type: &type counter
+            desc: &desc The bytes received or sent by the broker
+            unit: &unit By
+
+      - bean: kafka.server:type=BrokerTopicMetrics,name=BytesOutPerSec
+        metricAttribute:
+          direction: const(out)
+        mapping:
+          Count:
+            metric: *metric
+            type: *type
+            desc: *desc
+            unit: *unit
+
+      - beans:
+          - kafka.server:type=DelayedOperationPurgatory,name=PurgatorySize,delayedOperation=Produce
+          - kafka.server:type=DelayedOperationPurgatory,name=PurgatorySize,delayedOperation=Fetch
+        metricAttribute:
+          type: param(delayedOperation)
+        mapping:
+          Value:
+            metric: kafka.purgatory.size
+            type: gauge
+            desc: The number of requests waiting in purgatory
+            unit: "{request}"
+
+      - bean: kafka.server:type=ReplicaManager,name=PartitionCount
+        mapping:
+          Value:
+            metric: kafka.partition.count
+            type: gauge
+            desc: The number of partitions on the broker
+            unit: "{partition}"
+
+      - bean: kafka.controller:type=KafkaController,name=OfflinePartitionsCount
+        mapping:
+          Value:
+            metric: kafka.partition.offline
+            type: gauge
+            desc: The number of partitions offline
+            unit: "{partition}"
+
+      - bean: kafka.server:type=ReplicaManager,name=UnderReplicatedPartitions
+        mapping:
+          Value:
+            metric: kafka.partition.under_replicated
+            type: gauge
+            desc: The number of under replicated partitions
+            unit: "{partition}"
+
+      - bean: kafka.server:type=ReplicaManager,name=IsrShrinksPerSec
+        metricAttribute:
+          operation: const(shrink)
+        mapping:
+          Count:
+            metric: kafka.isr.operation.count
+            type: counter
+            desc: The number of in-sync replica shrink and expand operations
+            unit: "{operation}"
+
+      - bean: kafka.server:type=ReplicaManager,name=IsrExpandsPerSec
+        metricAttribute:
+          operation: const(expand)
+        mapping:
+          Count:
+            metric: kafka.isr.operation.count
+            type: counter
+            desc: The number of in-sync replica shrink and expand operations
+            unit: "{operation}"
+
+      - bean: kafka.server:type=ReplicaFetcherManager,name=MaxLag,clientId=Replica
+        mapping:
+          Value:
+            metric: kafka.max.lag
+            type: gauge
+            desc: The max lag in messages between follower and leader replicas
+            unit: "{message}"
+
+      - bean: kafka.controller:type=KafkaController,name=ActiveControllerCount
+        mapping:
+          Value:
+            metric: kafka.controller.active.count
+            type: gauge
+            desc: For KRaft mode, the number of active controllers in the cluster. For ZooKeeper, indicates whether the broker is the controller broker.
+            unit: "{controller}"
+
+      - bean: kafka.controller:type=ControllerStats,name=LeaderElectionRateAndTimeMs
+        mapping:
+          Count:
+            metric: kafka.leader.election.rate
+            type: counter
+            desc: The leader election count
+            unit: "{election}"
+
+      - bean: kafka.controller:type=ControllerStats,name=UncleanLeaderElectionsPerSec
+        mapping:
+          Count:
+            metric: kafka.unclean.election.rate
+            type: counter
+            desc: Unclean leader election count - increasing indicates broker failures
+            unit: "{election}"
+
+      # ── Additional metrics — remove this section to reduce data ingest ───────────
+
+      - beans:
+          - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=Produce
+          - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=FetchConsumer
+          - kafka.network:type=RequestMetrics,name=TotalTimeMs,request=FetchFollower
+        metricAttribute:
+          type: param(request)
+        unit: ms
+        mapping:
+          Count:
+            metric: kafka.request.time.total
+            type: counter
+            desc: The total time the broker has taken to service requests
+          50thPercentile:
+            metric: kafka.request.time.50p
+            type: gauge
+            desc: The 50th percentile time the broker has taken to service requests
+          Mean:
+            metric: kafka.request.time.avg
+            type: gauge
+            desc: The average time the broker has taken to service requests
+
+      - bean: kafka.log:type=LogFlushStats,name=LogFlushRateAndTimeMs
+        unit: ms
+        type: gauge
+        prefix: kafka.logs.flush.
+        mapping:
+          Count:
+            metric: count
+            unit: '{flush}'
+            type: counter
+            desc: Log flush count
+          50thPercentile:
+            metric: time.50p
+            desc: Log flush time - 50th percentile
+          99thPercentile:
+            metric: time.99p
+            desc: Log flush time - 99th percentile
+
+      - bean: java.lang:type=GarbageCollector,name=*
+        mapping:
+          CollectionTime:
+            metric: jvm.gc.collections.elapsed
+            type: counter
+            unit: ms
+            desc: the approximate accumulated collection elapsed time in milliseconds
+            metricAttribute:
+              name: param(name)
+
+      - bean: java.lang:type=ClassLoading
+        mapping:
+          LoadedClassCount:
+            metric: jvm.class.count
+            type: gauge
+            unit: "{class}"
+            desc: Currently loaded class count
+
+      - bean: java.lang:type=Memory
+        unit: By
+        prefix: jvm.memory.
+        dropNegativeValues: true
+        mapping:
+          HeapMemoryUsage.committed:
+            metric: heap.committed
+            desc: Committed heap memory
+            type: gauge
+
+      - bean: java.lang:type=OperatingSystem
+        prefix: jvm.
+        dropNegativeValues: true
+        mapping:
+          SystemLoadAverage:
+            metric: system.cpu.load_1m
+            type: gauge
+            unit: "{run_queue_item}"
+            desc: System load average (1 minute)
+          AvailableProcessors:
+            metric: cpu.count
+            type: gauge
+            unit: "{cpu}"
+            desc: Number of processors available
+          ProcessCpuLoad:
+            metric: cpu.recent_utilization
+            type: gauge
+            unit: '1'
+            desc: Recent CPU utilization for JVM process (0.0 to 1.0)
+          OpenFileDescriptorCount:
+            metric: file_descriptor.count
+            type: gauge
+            unit: "{file_descriptor}"
+            desc: Number of open file descriptors
+
+      - bean: java.lang:type=MemoryPool,name=*
+        type: gauge
+        unit: By
+        metricAttribute:
+          name: param(name)
+        mapping:
+          Usage.used:
+            metric: jvm.memory.pool.used
+            desc: Memory pool usage by generation (G1 Old Gen, Eden, Survivor)
+          Usage.max:
+            metric: jvm.memory.pool.max
+            desc: Maximum memory pool size
+          CollectionUsage.used:
+            metric: jvm.memory.pool.used_after_last_gc
+            desc: Memory used after last GC (shows retained memory baseline)
+
+---
+# ── Headless Service (pod-to-pod DNS + KRaft quorum) ─────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-headless
+  namespace: kafka
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true   # Allow DNS resolution before pods are ready (needed for KRaft quorum)
+  selector:
+    app: kafka
+  ports:
+    - name: broker
+      port: 9092
+    - name: controller
+      port: 9093
+
+---
+# ── ClusterIP Service (apps + collector bootstrap) ────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: kafka
+spec:
+  selector:
+    app: kafka
+  ports:
+    - name: broker
+      port: 9092
+      targetPort: 9092
+
+---
+# ── StatefulSet — 2 combined controller+broker pods ──────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: kafka
+spec:
+  serviceName: kafka-headless
+  replicas: 2
+  podManagementPolicy: Parallel   # Start both pods simultaneously (required for KRaft quorum)
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      # ── Init: download OTel Java Agent ──────────────────────
+      initContainers:
+        - name: otel-java-agent-init
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - |
+              apk add --no-cache curl && \
+              curl -fSL \
+                "https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/latest/download/opentelemetry-javaagent.jar" \
+                -o /opt/otel-agent/opentelemetry-javaagent.jar
+          volumeMounts:
+            - name: otel-agent
+              mountPath: /opt/otel-agent
+
+      containers:
+        - name: kafka
+          image: apache/kafka:3.8.1
+          # Derive KAFKA_NODE_ID and KAFKA_ADVERTISED_LISTENERS from pod ordinal.
+          # Pod kafka-0 → node 1, kafka-1 → node 2 (KRaft node IDs are 1-indexed).
+          command:
+            - /bin/bash
+            - -c
+            - |
+              POD_ORDINAL="${HOSTNAME##*-}"
+              export KAFKA_NODE_ID="$((POD_ORDINAL + 1))"
+              export KAFKA_ADVERTISED_LISTENERS="PLAINTEXT://${HOSTNAME}.kafka-headless.kafka.svc.cluster.local:9092"
+              exec /etc/kafka/docker/run
+          env:
+            - name: CLUSTER_ID
+              value: "MkU3OEVBNTcwNTJENDM2Qk"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka-0.kafka-headless.kafka.svc.cluster.local:9093,2@kafka-1.kafka-headless.kafka.svc.cluster.local:9093"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://:9092,CONTROLLER://:9093"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_DEFAULT_REPLICATION_FACTOR
+              value: "2"
+            - name: KAFKA_MIN_INSYNC_REPLICAS
+              value: "1"
+            - name: KAFKA_NUM_PARTITIONS
+              value: "2"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "2"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "2"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
+            # Edit KAFKA_CLUSTER_NAME — must match the value in collector.yaml
+            - name: KAFKA_CLUSTER_NAME
+              value: "kafka-k8s-cluster"
+            - name: BROKER_METRIC_EXPORT_INTERVAL_MS
+              value: "30000"
+            # OTel Java Agent — K8s substitutes $(VAR) at container startup
+            - name: KAFKA_OPTS
+              value: >-
+                -javaagent:/opt/otel-agent/opentelemetry-javaagent.jar
+                -Dotel.jmx.enabled=true
+                -Dotel.jmx.config=/etc/kafka/jmx-custom-config.yaml
+                -Dotel.instrumentation.runtime-telemetry.enabled=false
+                -Dotel.resource.attributes=kafka.cluster.name=$(KAFKA_CLUSTER_NAME)
+                -Dotel.exporter.otlp.endpoint=http://otel-collector:4317
+                -Dotel.exporter.otlp.protocol=grpc
+                -Dotel.metrics.exporter=otlp
+                -Dotel.metric.export.interval=$(BROKER_METRIC_EXPORT_INTERVAL_MS)
+          ports:
+            - containerPort: 9092
+              name: broker
+            - containerPort: 9093
+              name: controller
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "KAFKA_OPTS='' /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 10
+          volumeMounts:
+            - name: otel-agent
+              mountPath: /opt/otel-agent
+            - name: jmx-custom-config
+              mountPath: /etc/kafka/jmx-custom-config.yaml
+              subPath: jmx-custom-config.yaml
+            - name: data
+              mountPath: /var/lib/kafka/data
+
+      volumes:
+        - name: otel-agent
+          emptyDir: {}
+        - name: jmx-custom-config
+          configMap:
+            name: kafka-jmx-custom-config
+
+  # Persistent volume per broker for Kafka logs
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+
+---
+# ── Job: create topics once both brokers are ready ────────────────────────
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-topics-init
+  namespace: kafka
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: kafka-topics-init
+          image: apache/kafka:3.8.1
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1; do
+                sleep 5
+              done
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic orders --partitions 2 --replication-factor 2
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic payments --partitions 2 --replication-factor 2
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic shipments --partitions 2 --replication-factor 2
+              echo "Topics created:"
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list

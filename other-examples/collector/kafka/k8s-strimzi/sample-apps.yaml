@@ -1,0 +1,82 @@
+# ============================================================
+# Sample Producer and Consumer apps for Strimzi Kafka
+# ============================================================
+# Uses the official Apache Kafka image (public, no local build needed).
+# These generate traffic so that consumer lag metrics are visible.
+#
+# Bootstrap: kafka-strimzi-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092
+# Topic:     orders
+# Group:     kafka-consumer-group
+# ============================================================
+
+# ── Kafka Producer ────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-producer
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-producer
+  template:
+    metadata:
+      labels:
+        app: kafka-producer
+    spec:
+      containers:
+        - name: kafka-producer
+          image: apache/kafka:3.8.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                echo "order-$(date +%s%3N)" | /opt/kafka/bin/kafka-console-producer.sh \
+                  --bootstrap-server kafka-strimzi-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092 \
+                  --topic orders
+                sleep 1
+              done
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+
+---
+# ── Kafka Consumer ────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-consumer
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-consumer
+  template:
+    metadata:
+      labels:
+        app: kafka-consumer
+    spec:
+      containers:
+        - name: kafka-consumer
+          image: apache/kafka:3.8.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              /opt/kafka/bin/kafka-console-consumer.sh \
+                --bootstrap-server kafka-strimzi-cluster-kafka-bootstrap.kafka.svc.cluster.local:9092 \
+                --topic orders \
+                --group kafka-consumer-group \
+                --from-beginning
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

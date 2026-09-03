@@ -1,0 +1,113 @@
+# ============================================================
+# Producer + Consumer — Kubernetes Manifests
+# ============================================================
+# Optional: deploy sample Java apps that produce/consume
+# messages to generate traces and application metrics.
+#
+# Images must be built locally:
+#   docker build -t kafka-producer:latest ../common/apps/producer/
+#   docker build -t kafka-consumer:latest ../common/apps/consumer/
+#
+# Docker Desktop: images are automatically available (shared Docker daemon).
+# kind: kind load docker-image kafka-producer:latest
+# kind: kind load docker-image kafka-consumer:latest
+#
+# To customize:
+#   - Edit KAFKA_CLUSTER_NAME (must match kafka.yaml + collector.yaml)
+#   - Edit OTEL_SERVICE_NAME to label services in New Relic
+# ============================================================
+
+# ── Producer ─────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-producer
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-producer
+  template:
+    metadata:
+      labels:
+        app: kafka-producer
+    spec:
+      containers:
+        - name: kafka-producer
+          image: kafka-producer:latest
+          imagePullPolicy: Never
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_METRICS_EXPORTER
+              value: "otlp"
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            - name: OTEL_LOGS_EXPORTER
+              value: "none"
+            - name: OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED
+              value: "false"
+            - name: OTEL_SERVICE_NAME
+              value: "kafka-producer"
+            - name: KAFKA_CLUSTER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: collector-env-config
+                  key: KAFKA_CLUSTER_NAME
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "kafka.cluster.name=$(KAFKA_CLUSTER_NAME)"
+            - name: MESSAGE_INTERVAL_MS
+              value: "200"
+
+---
+# ── Consumer ─────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-consumer
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-consumer
+  template:
+    metadata:
+      labels:
+        app: kafka-consumer
+    spec:
+      containers:
+        - name: kafka-consumer
+          image: kafka-consumer:latest
+          imagePullPolicy: Never
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
+            - name: OTEL_METRICS_EXPORTER
+              value: "otlp"
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            - name: OTEL_LOGS_EXPORTER
+              value: "none"
+            - name: OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED
+              value: "false"
+            - name: OTEL_SERVICE_NAME
+              value: "kafka-consumer"
+            - name: KAFKA_CLUSTER_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: collector-env-config
+                  key: KAFKA_CLUSTER_NAME
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "kafka.cluster.name=$(KAFKA_CLUSTER_NAME)"
+            - name: KAFKA_GROUP_ID
+              value: "kafka-consumer-group"

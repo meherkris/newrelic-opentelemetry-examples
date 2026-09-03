@@ -1,0 +1,307 @@
+# ============================================================
+# Strimzi Kafka Cluster — Kubernetes Manifests
+# ============================================================
+# Requires Strimzi operator to be installed first:
+#   kubectl create namespace kafka
+#   kubectl create -f 'https://strimzi.io/install/latest?namespace=kafka'
+#   kubectl wait deployment -n kafka strimzi-cluster-operator \
+#     --for=condition=Available --timeout=5m
+#
+# To customize:
+#   - Edit KAFKA_CLUSTER_NAME (must match collector.yaml)
+#
+# Apply:
+#   kubectl apply -f kafka.yaml
+# ============================================================
+
+# ── JMX Exporter metrics config ───────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-jmx-metrics
+  namespace: kafka
+data:
+  kafka-metrics-config.yml: |
+    startDelaySeconds: 0
+    lowercaseOutputName: true
+    lowercaseOutputLabelNames: true
+    rules:
+      # Cluster-level controller metrics
+      - pattern: 'kafka.controller<type=KafkaController, name=GlobalTopicCount><>Value'
+        name: kafka_cluster_topic_count
+        type: GAUGE
+      - pattern: 'kafka.controller<type=KafkaController, name=GlobalPartitionCount><>Value'
+        name: kafka_cluster_partition_count
+        type: GAUGE
+      - pattern: 'kafka.controller<type=KafkaController, name=FencedBrokerCount><>Value'
+        name: kafka_broker_fenced_count
+        type: GAUGE
+      - pattern: 'kafka.controller<type=KafkaController, name=PreferredReplicaImbalanceCount><>Value'
+        name: kafka_partition_non_preferred_leader
+        type: GAUGE
+      - pattern: 'kafka.controller<type=KafkaController, name=OfflinePartitionsCount><>Value'
+        name: kafka_partition_offline
+        type: GAUGE
+      - pattern: 'kafka.controller<type=KafkaController, name=ActiveControllerCount><>Value'
+        name: kafka_controller_active_count
+        type: GAUGE
+      # Broker-level replica metrics
+      - pattern: 'kafka.server<type=ReplicaManager, name=UnderMinIsrPartitionCount><>Value'
+        name: kafka_partition_under_min_isr
+        type: GAUGE
+      - pattern: 'kafka.server<type=ReplicaManager, name=LeaderCount><>Value'
+        name: kafka_broker_leader_count
+        type: GAUGE
+      - pattern: 'kafka.server<type=ReplicaManager, name=PartitionCount><>Value'
+        name: kafka_partition_count
+        type: GAUGE
+      - pattern: 'kafka.server<type=ReplicaManager, name=UnderReplicatedPartitions><>Value'
+        name: kafka_partition_under_replicated
+        type: GAUGE
+      - pattern: 'kafka.server<type=ReplicaManager, name=IsrShrinksPerSec><>Count'
+        name: kafka_isr_operation_count
+        type: COUNTER
+        labels:
+          operation: "shrink"
+      - pattern: 'kafka.server<type=ReplicaManager, name=IsrExpandsPerSec><>Count'
+        name: kafka_isr_operation_count
+        type: COUNTER
+        labels:
+          operation: "expand"
+      - pattern: 'kafka.server<type=ReplicaFetcherManager, name=MaxLag, clientId=Replica><>Value'
+        name: kafka_max_lag
+        type: GAUGE
+      # Broker topic metrics (totals)
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=MessagesInPerSec><>Count'
+        name: kafka_message_count
+        type: COUNTER
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=TotalFetchRequestsPerSec><>Count'
+        name: kafka_request_count
+        type: COUNTER
+        labels:
+          type: "fetch"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=TotalProduceRequestsPerSec><>Count'
+        name: kafka_request_count
+        type: COUNTER
+        labels:
+          type: "produce"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=FailedFetchRequestsPerSec><>Count'
+        name: kafka_request_failed
+        type: COUNTER
+        labels:
+          type: "fetch"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=FailedProduceRequestsPerSec><>Count'
+        name: kafka_request_failed
+        type: COUNTER
+        labels:
+          type: "produce"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=BytesInPerSec><>Count'
+        name: kafka_network_io
+        type: COUNTER
+        labels:
+          direction: "in"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=BytesOutPerSec><>Count'
+        name: kafka_network_io
+        type: COUNTER
+        labels:
+          direction: "out"
+      # Per-topic metrics
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=MessagesInPerSec, topic=(.+)><>Count'
+        name: kafka_prod_msg_count
+        type: COUNTER
+        labels:
+          topic: "$1"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=BytesInPerSec, topic=(.+)><>Count'
+        name: kafka_topic_io
+        type: COUNTER
+        labels:
+          topic: "$1"
+          direction: "in"
+      - pattern: 'kafka.server<type=BrokerTopicMetrics, name=BytesOutPerSec, topic=(.+)><>Count'
+        name: kafka_topic_io
+        type: COUNTER
+        labels:
+          topic: "$1"
+          direction: "out"
+      # Request metrics
+      - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer|FetchFollower)><>99thPercentile'
+        name: kafka_request_time_99p
+        type: GAUGE
+        labels:
+          type: "$1"
+      - pattern: 'kafka.network<type=RequestChannel, name=RequestQueueSize><>Value'
+        name: kafka_request_queue
+        type: GAUGE
+      - pattern: 'kafka.server<type=DelayedOperationPurgatory, name=PurgatorySize, delayedOperation=(.+)><>Value'
+        name: kafka_purgatory_size
+        type: GAUGE
+        labels:
+          type: "$1"
+      # Controller stats
+      - pattern: 'kafka.controller<type=ControllerStats, name=LeaderElectionRateAndTimeMs><>Count'
+        name: kafka_leader_election_rate
+        type: COUNTER
+      - pattern: 'kafka.controller<type=ControllerStats, name=UncleanLeaderElectionsPerSec><>Count'
+        name: kafka_unclean_election_rate
+        type: COUNTER
+      # JVM Garbage Collection
+      - pattern: 'java.lang<name=(.+), type=GarbageCollector><>CollectionCount'
+        name: jvm_gc_collections_count
+        type: COUNTER
+        labels:
+          name: "$1"
+      # JVM Memory
+      - pattern: 'java.lang<type=Memory><HeapMemoryUsage>max'
+        name: jvm_memory_heap_max
+        type: GAUGE
+      - pattern: 'java.lang<type=Memory><HeapMemoryUsage>used'
+        name: jvm_memory_heap_used
+        type: GAUGE
+      # JVM Threading and System
+      - pattern: 'java.lang<type=Threading><>ThreadCount'
+        name: jvm_thread_count
+        type: GAUGE
+      - pattern: 'java.lang<type=OperatingSystem><>SystemCpuLoad'
+        name: jvm_system_cpu_utilization
+        type: GAUGE
+      # Broker uptime
+      - pattern: 'java.lang<type=Runtime><>Uptime'
+        name: kafka_broker_uptime
+        type: GAUGE
+
+      # ── Additional metrics — remove this section to reduce data ingest ───────────
+
+      - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer|FetchFollower)><>Count'
+        name: kafka_request_time_total
+        type: COUNTER
+        labels:
+          type: "$1"
+      - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer|FetchFollower)><>50thPercentile'
+        name: kafka_request_time_50p
+        type: GAUGE
+        labels:
+          type: "$1"
+      - pattern: 'kafka.network<type=RequestMetrics, name=TotalTimeMs, request=(Produce|FetchConsumer|FetchFollower)><>Mean'
+        name: kafka_request_time_avg
+        type: GAUGE
+        labels:
+          type: "$1"
+      - pattern: 'kafka.log<type=LogFlushStats, name=LogFlushRateAndTimeMs><>Count'
+        name: kafka_logs_flush_count
+        type: COUNTER
+      - pattern: 'kafka.log<type=LogFlushStats, name=LogFlushRateAndTimeMs><>50thPercentile'
+        name: kafka_logs_flush_time_50p
+        type: GAUGE
+      - pattern: 'kafka.log<type=LogFlushStats, name=LogFlushRateAndTimeMs><>99thPercentile'
+        name: kafka_logs_flush_time_99p
+        type: GAUGE
+      - pattern: 'java.lang<name=(.+), type=GarbageCollector><>CollectionTime'
+        name: jvm_gc_collections_elapsed
+        type: COUNTER
+        labels:
+          name: "$1"
+      - pattern: 'java.lang<type=Memory><HeapMemoryUsage>committed'
+        name: jvm_memory_heap_committed
+        type: GAUGE
+      - pattern: 'java.lang<type=ClassLoading><>LoadedClassCount'
+        name: jvm_class_count
+        type: GAUGE
+      - pattern: 'java.lang<type=OperatingSystem><>SystemLoadAverage'
+        name: jvm_system_cpu_load_1m
+        type: GAUGE
+      - pattern: 'java.lang<type=OperatingSystem><>AvailableProcessors'
+        name: jvm_cpu_count
+        type: GAUGE
+      - pattern: 'java.lang<type=OperatingSystem><>ProcessCpuLoad'
+        name: jvm_cpu_recent_utilization
+        type: GAUGE
+      - pattern: 'java.lang<type=OperatingSystem><>OpenFileDescriptorCount'
+        name: jvm_file_descriptor_count
+        type: GAUGE
+      - pattern: 'java.lang<type=MemoryPool, name=(.+)><Usage>used'
+        name: jvm_memory_pool_used
+        type: GAUGE
+        labels:
+          name: "$1"
+      - pattern: 'java.lang<type=MemoryPool, name=(.+)><Usage>max'
+        name: jvm_memory_pool_max
+        type: GAUGE
+        labels:
+          name: "$1"
+      - pattern: 'java.lang<type=MemoryPool, name=(.+)><CollectionUsage>used'
+        name: jvm_memory_pool_used_after_last_gc
+        type: GAUGE
+        labels:
+          name: "$1"
+
+---
+# ── KafkaNodePool (KRaft mode — single node acts as controller + broker) ──────
+# Strimzi 0.46+ requires KRaft; ZooKeeper is no longer supported.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: kafka-strimzi-cluster
+spec:
+  replicas: 1
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 2Gi
+        deleteClaim: true
+
+---
+# ── Strimzi Kafka Cluster (KRaft mode) ────────────────────────────────────────
+# Edit KAFKA_CLUSTER_NAME: must match collector.yaml (kafka.cluster.name value)
+# KAFKA_CLUSTER_NAME = "kafka-strimzi-cluster"
+apiVersion: kafka.strimzi.io/v1beta2
+kind: Kafka
+metadata:
+  name: kafka-strimzi-cluster
+  namespace: kafka
+  annotations:
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: 4.1.1
+    metadataVersion: 4.1-IV1
+    metricsConfig:
+      type: jmxPrometheusExporter
+      valueFrom:
+        configMapKeyRef:
+          name: kafka-jmx-metrics
+          key: kafka-metrics-config.yml
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+  entityOperator:
+    topicOperator: {}
+
+---
+# ── Topics ────────────────────────────────────────────────────────────────
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: orders
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: kafka-strimzi-cluster
+spec:
+  partitions: 1
+  replicas: 1

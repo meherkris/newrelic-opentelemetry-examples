@@ -1,5 +1,8 @@
 name: Java PR build (gradle)
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [ main ]
@@ -8,9 +11,9 @@ jobs:
   build-java:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up JDK 17
-        uses: actions/setup-java@v5.2.0
+        uses: actions/setup-java@v5.4.0
         with:
           distribution: temurin
           java-version: 17
@@ -24,7 +27,7 @@ jobs:
   markdown-link-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install markdown-link-check
         # TODO(jack-berg): use latest when config file reading bug is fixed: https://github.com/tcort/markdown-link-check/issues/246

@@ -1,0 +1,208 @@
+# ============================================================
+# New Relic OpenTelemetry - Self-Hosted Kafka Monitoring
+# ============================================================
+# Architecture:
+#   2 Kafka Brokers (KRaft mode, no ZooKeeper)
+#     └── OTel Java Agent on each broker
+#         ├── collects Kafka + JVM metrics via JMX
+#         └── pushes metrics via OTLP → OTel Collector
+#   OTel Collector
+#     └── receives OTLP from brokers + apps
+#     └── kafkametrics receiver for consumer lag
+#   Java Producer + Consumer
+#     └── zero OTel SDK code — instrumented via OTel Java Agent
+#
+# Quick start:
+#   cp .env.example .env        # add your New Relic license key
+#   docker compose up --build
+# ============================================================
+
+x-kafka-broker: &kafka-broker-base
+  image: apache/kafka:3.8.1
+  depends_on:
+    otel-java-agent-init:
+      condition: service_completed_successfully
+  volumes:
+    - otel-agent:/opt/otel-agent:ro
+    - ./kafka-jmx-complete-config.yaml:/etc/kafka/kafka-jmx-complete-config.yaml:ro
+  healthcheck:
+    test: ["CMD-SHELL", "KAFKA_OPTS='' /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+    interval: 15s
+    timeout: 10s
+    retries: 10
+    start_period: 30s
+
+x-kafka-env: &kafka-common-env
+  CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-broker-1:9093,2@kafka-broker-2:9093
+  KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_DEFAULT_REPLICATION_FACTOR: "2"
+  KAFKA_MIN_INSYNC_REPLICAS: "1"
+  KAFKA_NUM_PARTITIONS: "2"
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "2"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "2"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+services:
+
+  # ─────────────────────────────────────────────
+  # OTel Java Agent Init
+  # Downloads OTel Java Agent JAR once (cached after first build)
+  # ─────────────────────────────────────────────
+  otel-java-agent-init:
+    build:
+      context: ./otel-java-agent-init
+    container_name: otel-java-agent-init
+    volumes:
+      - otel-agent:/output
+
+  # ─────────────────────────────────────────────
+  # Kafka Broker 1
+  # ─────────────────────────────────────────────
+  kafka-broker-1:
+    <<: *kafka-broker-base
+    container_name: kafka-broker-1
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: "1"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-broker-1:9092
+      KAFKA_OPTS: >-
+        -javaagent:/opt/otel-agent/opentelemetry-javaagent.jar
+        -Dotel.jmx.enabled=true
+        -Dotel.jmx.config=/etc/kafka/kafka-jmx-complete-config.yaml
+        -Dotel.instrumentation.runtime-telemetry.enabled=false
+        -Dotel.resource.attributes=broker.id=1,kafka.cluster.name=${KAFKA_CLUSTER_NAME:-kafka-selfhost-cluster}
+        -Dotel.exporter.otlp.endpoint=http://otel-collector:4317
+        -Dotel.exporter.otlp.protocol=grpc
+        -Dotel.metrics.exporter=otlp
+        -Dotel.metric.export.interval=${BROKER_METRIC_EXPORT_INTERVAL_MS:-30000}
+    ports:
+      - "9092:9092"
+
+  # ─────────────────────────────────────────────
+  # Kafka Broker 2
+  # ─────────────────────────────────────────────
+  kafka-broker-2:
+    <<: *kafka-broker-base
+    container_name: kafka-broker-2
+    environment:
+      <<: *kafka-common-env
+      KAFKA_NODE_ID: "2"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-broker-2:9092
+      KAFKA_OPTS: >-
+        -javaagent:/opt/otel-agent/opentelemetry-javaagent.jar
+        -Dotel.jmx.enabled=true
+        -Dotel.jmx.config=/etc/kafka/kafka-jmx-complete-config.yaml
+        -Dotel.instrumentation.runtime-telemetry.enabled=false
+        -Dotel.resource.attributes=broker.id=2,kafka.cluster.name=${KAFKA_CLUSTER_NAME:-kafka-selfhost-cluster}
+        -Dotel.exporter.otlp.endpoint=http://otel-collector:4317
+        -Dotel.exporter.otlp.protocol=grpc
+        -Dotel.metrics.exporter=otlp
+        -Dotel.metric.export.interval=${BROKER_METRIC_EXPORT_INTERVAL_MS:-30000}
+    ports:
+      - "9093:9092"
+
+  # ─────────────────────────────────────────────
+  # Topic Initializer
+  # Creates topics once both brokers are healthy
+  # ─────────────────────────────────────────────
+  kafka-init:
+    image: apache/kafka:3.8.1
+    container_name: kafka-init
+    depends_on:
+      kafka-broker-1:
+        condition: service_healthy
+      kafka-broker-2:
+        condition: service_healthy
+    command: >
+      /bin/bash -c "
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-broker-1:9092 --create --if-not-exists --topic orders --partitions 2 --replication-factor 2 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-broker-1:9092 --create --if-not-exists --topic payments --partitions 2 --replication-factor 2 &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-broker-1:9092 --create --if-not-exists --topic shipments --partitions 2 --replication-factor 2 &&
+        echo 'Topics created:' &&
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-broker-1:9092 --list
+      "
+
+  # ─────────────────────────────────────────────
+  # OpenTelemetry Collector
+  # ─────────────────────────────────────────────
+  otel-collector:
+    # NRDOT is New Relic's OTel distribution; swap image in .env to use upstream otelcol-contrib.
+    image: ${OTEL_COLLECTOR_IMAGE:-newrelic/nrdot-collector:latest}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    container_name: otel-collector
+    depends_on:
+      kafka-broker-1:
+        condition: service_healthy
+    ports:
+      - "4317:4317"   # OTLP gRPC
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    environment:
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY}
+      - NEW_RELIC_OTLP_ENDPOINT=${NEW_RELIC_OTLP_ENDPOINT:-https://otlp.nr-data.net:4317}
+      - KAFKA_CLUSTER_NAME=${KAFKA_CLUSTER_NAME:-kafka-selfhost-cluster}
+      - KAFKA_BOOTSTRAP_BROKER_ADDRESSES=kafka-broker-1:9092,kafka-broker-2:9092
+      - KAFKA_METRICS_COLLECTION_INTERVAL=${KAFKA_METRICS_COLLECTION_INTERVAL:-30s}
+
+  # ─────────────────────────────────────────────
+  # Kafka Producer
+  # Java app — zero OTel SDK code, instrumented via OTel Java Agent
+  # ─────────────────────────────────────────────
+  producer:
+    build:
+      context: ../common/apps/producer
+      dockerfile: Dockerfile
+    container_name: kafka-producer
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-broker-1:9092,kafka-broker-2:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: ${PRODUCER_SERVICE_NAME:-kafka-producer}
+      OTEL_RESOURCE_ATTRIBUTES: kafka.cluster.name=${KAFKA_CLUSTER_NAME:-kafka-selfhost-cluster}
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: none
+      OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED: "false"
+      MESSAGE_INTERVAL_MS: ${MESSAGE_INTERVAL_MS:-200}
+    restart: on-failure
+
+  # ─────────────────────────────────────────────
+  # Kafka Consumer
+  # Java app — zero OTel SDK code, instrumented via OTel Java Agent
+  # ─────────────────────────────────────────────
+  consumer:
+    build:
+      context: ../common/apps/consumer
+      dockerfile: Dockerfile
+    container_name: kafka-consumer
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka-broker-1:9092,kafka-broker-2:9092
+      KAFKA_GROUP_ID: ${CONSUMER_GROUP_ID:-nr-otel-consumer-group}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: ${CONSUMER_SERVICE_NAME:-kafka-consumer}
+      OTEL_RESOURCE_ATTRIBUTES: kafka.cluster.name=${KAFKA_CLUSTER_NAME:-kafka-selfhost-cluster}
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: none
+      OTEL_INSTRUMENTATION_RUNTIME_TELEMETRY_ENABLED: "false"
+    restart: on-failure
+
+volumes:
+  otel-agent:

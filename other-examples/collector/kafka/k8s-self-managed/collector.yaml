@@ -1,0 +1,256 @@
+# ============================================================
+# OpenTelemetry Collector — Kubernetes Manifests
+# ============================================================
+# Inline pipeline config in a ConfigMap — no Helm required.
+#
+# To customize:
+#   - Edit collector-env-config ConfigMap values (KAFKA_CLUSTER_NAME, NEW_RELIC_OTLP_ENDPOINT)
+#
+# Apply:
+#   kubectl apply -f secrets.yaml   # create newrelic-secret first
+#   kubectl apply -f collector.yaml
+# ============================================================
+
+# ── Namespace ─────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka
+
+---
+# ── Collector pipeline config (inline) ───────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: collector-config
+  namespace: kafka
+data:
+  collector-config: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+
+      kafkametrics:
+        brokers: "kafka:9092"
+        protocol_version: 2.0.0
+        scrapers:
+          - brokers
+          - topics
+          - consumers
+        collection_interval: 30s
+        topic_match: "^[^_].*$"
+        metrics:
+          kafka.topic.min_insync_replicas:
+            enabled: true
+          kafka.topic.replication_factor:
+            enabled: true
+          kafka.partition.replicas:
+            enabled: false
+          kafka.partition.oldest_offset:
+            enabled: false
+          kafka.partition.current_offset:
+            enabled: false
+
+    processors:
+      batch/aggregation:
+        send_batch_size: 1024
+        timeout: 30s
+
+      batch/apps:
+        send_batch_size: 1024
+        timeout: 5s
+
+      resource:
+        attributes:
+          - action: insert
+            key: kafka.cluster.name
+            value: ${env:KAFKA_CLUSTER_NAME}
+
+      transform/remove_broker_id:
+        metric_statements:
+          - context: resource
+            statements:
+              - delete_key(attributes, "broker.id")
+
+      transform/remove_extra_attributes:
+        metric_statements:
+          - context: resource
+            statements:
+              - delete_matching_keys(attributes, "^process\\..*")
+              - delete_matching_keys(attributes, "^telemetry\\..*")
+              - delete_key(attributes, "host.arch")
+              - delete_key(attributes, "os.description")
+              - delete_key(attributes, "host.image.id")
+              - delete_key(attributes, "host.type")
+              - delete_matching_keys(attributes, "^cloud\\..*")
+              - delete_key(attributes, "service.instance.id") where IsMatch(attributes["service.name"], "^unknown_service:")
+              - delete_key(attributes, "service.name") where IsMatch(attributes["service.name"], "^unknown_service:")
+
+      # Filter internal Kafka topics as a safety net (topic_match handles the receiver side)
+      filter/internal_topics:
+        metrics:
+          datapoint:
+            - 'attributes["topic"] != nil and IsMatch(attributes["topic"], "^__.*")'
+
+      filter/include_cluster_metrics:
+        metrics:
+          include:
+            match_type: regexp
+            metric_names:
+              - kafka\.partition\.offline
+              - kafka\.(leader|unclean)\.election\.rate
+              - kafka\.partition\.non_preferred_leader
+              - kafka\.broker\.fenced\.count
+              - kafka\.cluster\.partition\.count
+              - kafka\.cluster\.topic\.count
+
+      filter/exclude_cluster_metrics:
+        metrics:
+          exclude:
+            match_type: regexp
+            metric_names:
+              - kafka\.partition\.offline
+              - kafka\.(leader|unclean)\.election\.rate
+              - kafka\.partition\.non_preferred_leader
+              - kafka\.broker\.fenced\.count
+              - kafka\.cluster\.partition\.count
+              - kafka\.cluster\.topic\.count
+
+      transform/des_units:
+        metric_statements:
+          - context: metric
+            statements:
+              - set(description, "") where description != ""
+              - set(unit, "") where unit != ""
+
+      cumulativetodelta: {}
+
+      groupbyattrs/cluster:
+        keys: [kafka.cluster.name]
+
+      metricstransform/cluster_max:
+        transforms:
+          - include: "kafka\\.partition\\.offline|kafka\\.leader\\.election\\.rate|kafka\\.unclean\\.election\\.rate|kafka\\.partition\\.non_preferred_leader|kafka\\.broker\\.fenced\\.count|kafka\\.cluster\\.partition\\.count|kafka\\.cluster\\.topic\\.count"
+            match_type: regexp
+            action: update
+            operations:
+              - action: aggregate_labels
+                aggregation_type: max
+                label_set: []
+
+      metricstransform/kafka_topic_sum_aggregation:
+        transforms:
+          - include: kafka.partition.replicas_in_sync
+            action: insert
+            new_name: kafka.partition.replicas_in_sync.total
+            operations:
+              - action: aggregate_labels
+                label_set: [topic]
+                aggregation_type: sum
+          - include: kafka.partition.replicas
+            action: insert
+            new_name: kafka.partition.replicas.total
+            operations:
+              - action: aggregate_labels
+                label_set: [topic]
+                aggregation_type: sum
+
+      filter/remove_partition_level_replicas:
+        metrics:
+          exclude:
+            match_type: strict
+            metric_names:
+              - kafka.partition.replicas_in_sync
+
+    exporters:
+      otlp/newrelic:
+        endpoint: ${env:NEW_RELIC_OTLP_ENDPOINT}
+        headers:
+          api-key: ${env:NEW_RELIC_LICENSE_KEY}
+        compression: gzip
+        timeout: 30s
+
+    service:
+      pipelines:
+        metrics/broker:
+          receivers: [otlp, kafkametrics]
+          processors: [resource, filter/exclude_cluster_metrics, filter/internal_topics, transform/remove_extra_attributes, transform/des_units, cumulativetodelta, metricstransform/kafka_topic_sum_aggregation, filter/remove_partition_level_replicas, batch/aggregation]
+          exporters: [otlp/newrelic]
+
+        metrics/cluster:
+          receivers: [otlp]
+          processors: [resource, filter/include_cluster_metrics, transform/remove_broker_id, transform/remove_extra_attributes, transform/des_units, cumulativetodelta, groupbyattrs/cluster, metricstransform/cluster_max, batch/aggregation]
+          exporters: [otlp/newrelic]
+
+        traces/apps:
+          receivers: [otlp]
+          processors: [resource, batch/apps]
+          exporters: [otlp/newrelic]
+
+        logs/apps:
+          receivers: [otlp]
+          processors: [resource, batch/apps]
+          exporters: [otlp/newrelic]
+
+---
+# ── Collector Deployment ──────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+    spec:
+      containers:
+        - name: otel-collector
+          # NRDOT is New Relic's OTel distribution; swap image to use upstream otelcol-contrib.
+          image: newrelic/nrdot-collector:latest
+          args: ["--config=/etc/otelcol-contrib/config.yaml"]
+          env:
+            - name: NEW_RELIC_LICENSE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: newrelic-secret
+                  key: NEW_RELIC_LICENSE_KEY
+            - name: NEW_RELIC_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: newrelic-secret
+                  key: NEW_RELIC_OTLP_ENDPOINT
+            - name: KAFKA_CLUSTER_NAME
+              value: "kafka-k8s-cluster"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol-contrib
+      volumes:
+        - name: config
+          configMap:
+            name: collector-config
+            items:
+              - key: collector-config
+                path: config.yaml
+
+---
+# ── Service (OTLP gRPC for brokers + apps) ───────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: kafka
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
