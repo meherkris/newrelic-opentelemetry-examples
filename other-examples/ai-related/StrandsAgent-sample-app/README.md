@@ -23,9 +23,10 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
 ```
 ├── strands_app.py                       # Main application (API + agent + tools)
 ├── requirements.txt                     # Python dependencies
-├── .env                                 # Environment variables (API keys, config)
-├── docker-compose-strands.yaml          # Docker Compose for OTel Collector
-├── strands-otel-collector-config.yaml   # OTel Collector pipeline configuration
+├── .env                                 # Environment variables (API keys, config) — must live here, at the root
+├── nr-config/
+│   ├── docker-compose-strands.yaml      # Docker Compose for OTel Collector (reads ../.env)
+│   └── strands-otel-collector-config.yaml # OTel Collector pipeline configuration
 └── .venv/                               # Python virtual environment
 ```
 
@@ -53,7 +54,7 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
 
 3. **Configure environment variables:**
 
-   Create a `.env` file with the following:
+   Create a `.env` file **at the project root** (not inside `nr-config/`) with the following:
 
    ```env
    OPENAI_API_KEY=<your-openai-api-key>
@@ -63,6 +64,8 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
 
    See [`.env.example`](.env.example) for a template.
 
+   > **Note:** `nr-config/docker-compose-strands.yaml` references this file as `env_file: ../.env`, so it must stay at the project root. If the collector starts but `NEW_RELIC_LICENSE_KEY` is missing, traces will silently fail to export — check `docker compose -f nr-config/docker-compose-strands.yaml logs` and confirm `.env` exists at the root.
+
    `gen_ai_span_attributes_only` makes Strands record `gen_ai.input.messages` / `gen_ai.output.messages` as attributes directly on the `chat`/`invoke_agent` spans.
 
    > **Note:** `strands_app.py` hardcodes the OTLP exporter endpoint (`http://localhost:4318/v1/traces`) and the collector's `resource` processor force-sets `service.name` to `strands-math-tutor` — so `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` env vars have no effect here even though the underlying SDK/library support them.
@@ -70,7 +73,7 @@ This application demonstrates how to build an AI agent with tool-use capabilitie
 4. **Start the OpenTelemetry Collector:**
 
    ```bash
-   docker-compose -f docker-compose-strands.yaml up -d
+   docker-compose -f nr-config/docker-compose-strands.yaml up -d
    ```
 
 5. **Run the application:**
