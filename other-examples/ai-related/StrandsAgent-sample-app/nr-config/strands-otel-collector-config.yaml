@@ -6,6 +6,10 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
+extensions:
+  zpages:
+    endpoint: 0.0.0.0:55679
+    
 processors:
   batch:
     timeout: 10s
@@ -47,6 +51,7 @@ exporters:
     path: ./telemetry-data.json
 
 service:
+  extensions: [zpages]
   pipelines:
     traces:
       receivers: [otlp]
