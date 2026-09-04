@@ -10,7 +10,7 @@ services:
       - "4318:4318"   # OTLP HTTP receiver
       - "55679:55679" # ZPages extension
     env_file:
-      - .env
+      - ../.env
     restart: unless-stopped
     networks:
       - strands-otel-network
