@@ -297,7 +297,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Create `.env` (see [`.env.example`](.env.example)):
+Create `.env` **at the project root** — not inside `nr-config/` — (see [`.env.example`](.env.example)):
 
 ```env
 OPENAI_API_KEY=<your-openai-api-key>
@@ -306,6 +306,9 @@ OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,gen_ai_span_attributes_
 ```
 
 **Security note:** `.env` is gitignored — never commit it. Rotate any key that has been pasted into a terminal, chat log, or shared screen.
+
+`nr-config/docker-compose-strands.yaml` loads this file via `env_file: ../.env`, resolved relative to the compose file's own directory — so it always points at the project-root `.env` regardless of the working directory `docker compose` is invoked from. If `.env` ends up anywhere else, the collector container starts without `NEW_RELIC_LICENSE_KEY` and traces silently fail to export (no error — the OTLP exporter just gets rejected by New Relic's endpoint).
+
 
 ### 5.3 Start the OTel Collector
 
@@ -422,7 +425,7 @@ CMD ["uvicorn", "strands_app:app", "--host", "0.0.0.0", "--port", "8000", "--wor
 | Symptom | Fix |
 |---|---|
 | `ModuleNotFoundError` | `pip install -r requirements.txt` |
-| `OPENAI_API_KEY not set` | Create `.env` with your OpenAI key |
+| `OPENAI_API_KEY not set` | Create `.env` at the project root with your OpenAI key |
 | `Connection refused on port 4318` | Start the collector: `docker compose -f docker-compose-strands.yaml up -d` |
 | `Address already in use :8000` | `lsof -nP -iTCP:8000 -sTCP:LISTEN` then `kill <PID>` |
 
@@ -439,7 +442,7 @@ Check `docker logs strands-otel-collector` after restarting — a YAML structura
 ### 8.3 Telemetry not appearing in New Relic
 
 1. `docker logs strands-otel-collector --tail 100` — look for `exporterhelper` errors on `otlphttp/newrelic`
-2. Verify `NEW_RELIC_LICENSE_KEY` is correct and set in `.env`
+2. Verify `NEW_RELIC_LICENSE_KEY` is correct and set in the project-root `.env` (not a `.env` inside `nr-config/` — `env_file: ../.env` in `nr-config/docker-compose-strands.yaml` won't find it there, and the collector will start with the variable unset, causing traces to silently fail to export)
 3. Confirm you're looking at the **staging** account/UI — this config exports to `staging-otlp.nr-data.net`, not production
 4. Query `Span` directly via NRQL to separate a real ingest problem from a UI-page gap:
    ```sql
