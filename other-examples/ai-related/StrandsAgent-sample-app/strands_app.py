@@ -100,6 +100,12 @@ agent = Agent(
 )
 
 
+@app.get("/")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok"}
+    
+
 @app.post("/prompt", response_model=PromptResponse)
 async def prompt_agent(request: PromptRequest):
     """Send a prompt to the math tutor agent and get a response."""
